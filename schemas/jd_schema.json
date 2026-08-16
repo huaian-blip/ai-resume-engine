@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JdParseOutput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["job_title", "summary", "hard_requirements", "soft_requirements", "keywords", "industry", "salary_range"],
+  "properties": {
+    "job_title": { "type": "string" },
+    "summary": { "type": "string", "maxLength": 80 },
+    "hard_requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["education", "experience_years", "required_skills", "certificates"],
+      "properties": {
+        "education": { "type": "string" },
+        "experience_years": { "type": "string" },
+        "required_skills": { "type": "array", "items": { "type": "string" } },
+        "certificates": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "soft_requirements": { "type": "array", "items": { "type": "string" } },
+    "keywords": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["responsibility", "skill"],
+      "properties": {
+        "responsibility": { "type": "array", "items": { "type": "string" } },
+        "skill": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "industry": { "type": "string" },
+    "salary_range": { "type": ["string", "null"] }
+  }
+}

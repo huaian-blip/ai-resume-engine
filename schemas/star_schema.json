@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "StarOptimizeOutput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["optimized_items"],
+  "properties": {
+    "optimized_items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["original", "optimized", "star_elements", "quantitative_suggestion", "word_count"],
+        "properties": {
+          "original": { "type": "string" },
+          "optimized": { "type": "string", "maxLength": 50 },
+          "star_elements": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["s", "t", "a", "r"],
+            "properties": {
+              "s": { "type": ["string", "null"] },
+              "t": { "type": ["string", "null"] },
+              "a": { "type": "string" },
+              "r": { "type": "string" }
+            }
+          },
+          "quantitative_suggestion": { "type": ["string", "null"] },
+          "word_count": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

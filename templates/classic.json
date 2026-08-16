@@ -1,0 +1,19 @@
+{
+  "id": "classic",
+  "name": "经典商务",
+  "layout": "single_column_header",
+  "style": {
+    "primary_color": "#1f2937",
+    "font_family": "Georgia, 'Songti SC', 'SimSun', serif",
+    "page_padding": "48px",
+    "font_size": "14px",
+    "section_title_style": "bar"
+  },
+  "sections": [
+    { "key": "self_eval", "order": 1 },
+    { "key": "work", "order": 2 },
+    { "key": "education", "order": 3 },
+    { "key": "projects", "order": 4 },
+    { "key": "skills", "order": 5 }
+  ]
+}

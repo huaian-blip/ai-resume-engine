@@ -1,0 +1,19 @@
+{
+  "id": "modern",
+  "name": "现代简洁",
+  "layout": "two_column_header",
+  "style": {
+    "primary_color": "#2563eb",
+    "font_family": "'Microsoft YaHei', 'PingFang SC', sans-serif",
+    "page_padding": "36px",
+    "font_size": "14px",
+    "section_title_style": "line"
+  },
+  "sections": [
+    { "key": "education", "order": 1 },
+    { "key": "work", "order": 2 },
+    { "key": "projects", "order": 3 },
+    { "key": "skills", "order": 4 },
+    { "key": "self_eval", "order": 5 }
+  ]
+}

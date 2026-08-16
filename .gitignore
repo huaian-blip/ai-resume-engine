@@ -1,0 +1,22 @@
+# 密钥与配置（禁止提交）
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 测试产物
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 浏览器缓存
+ms-playwright/

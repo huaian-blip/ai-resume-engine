@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ResumeData",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["basic"],
+  "properties": {
+    "basic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "city": { "type": "string" },
+        "job_intention": { "type": "string" },
+        "expected_salary": { "type": "string" }
+      }
+    },
+    "education": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["school", "degree", "major", "graduation"],
+        "properties": {
+          "school": { "type": "string" },
+          "degree": { "type": "string" },
+          "major": { "type": "string" },
+          "graduation": { "type": "string" },
+          "note": { "type": "string" }
+        }
+      }
+    },
+    "work": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["company", "position", "start", "end", "responsibilities"],
+        "properties": {
+          "company": { "type": "string" },
+          "position": { "type": "string" },
+          "start": { "type": "string" },
+          "end": { "type": "string" },
+          "industry": { "type": "string" },
+          "responsibilities": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "role", "start", "end", "description"],
+        "properties": {
+          "name": { "type": "string" },
+          "role": { "type": "string" },
+          "start": { "type": "string" },
+          "end": { "type": "string" },
+          "description": { "type": "array", "items": { "type": "string" } },
+          "achievements": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "skills": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "skills": { "type": "array", "items": { "type": "string" } },
+        "certificates": { "type": "array", "items": { "type": "string" } },
+        "languages": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "self_evaluation": { "type": "string" },
+    "sensitive_fields": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["name", "phone", "email", "city", "company"] }
+    }
+  }
+}

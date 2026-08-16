@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MatchScoreOutput",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["total_score", "dimension_scores", "gaps", "highlights", "suggestion_summary"],
+  "properties": {
+    "total_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "dimension_scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hard_skills", "experience_relevance", "soft_quality", "education"],
+      "properties": {
+        "hard_skills": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "experience_relevance": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "soft_quality": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "education": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "gaps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["requirement", "user_evidence", "suggestion"],
+        "properties": {
+          "requirement": { "type": "string" },
+          "user_evidence": { "type": "string" },
+          "suggestion": { "type": "string", "maxLength": 30 }
+        }
+      }
+    },
+    "highlights": { "type": "array", "items": { "type": "string" } },
+    "suggestion_summary": { "type": "string", "maxLength": 100 }
+  }
+}

@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>简历输入模块 · 前端性能优化演示</title>
+<style>
+  /* ===== CSS 优化：减少重排重绘 =====
+     1) 动画只使用 transform / opacity（走合成层，不触发 reflow）
+     2) section 使用 content-visibility 跳过屏外渲染
+     3) 虚拟列表行定位用 transform:translateY 代替 top
+     4) 避免动态改 width/height/top 触发布局抖动，读写分离批量更新 */
+  :root {
+    --primary: #2563eb;
+    --bg: #f3f4f6;
+    --card: #fff;
+    --border: #e5e7eb;
+    --muted: #6b7280;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif; background: var(--bg); color: #1f2937; padding: 16px; }
+
+  h1 { font-size: 22px; margin-bottom: 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+
+  .stats { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+  .stat { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; font-size: 13px; }
+  .stat b { color: var(--primary); font-size: 16px; }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .card h2 { font-size: 16px; margin-bottom: 4px; }
+  .card .tip { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .card h3 { font-size: 13px; color: var(--primary); margin: 10px 0 6px; }
+
+  /* 1) transform 动画 */
+  button { border: 1px solid var(--border); background: #fff; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  button:active { transform: scale(0.96); transition: transform 60ms; } /* 合成层动画 */
+  .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+
+  input[type=text], textarea { width: 100%; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-family: inherit; }
+  textarea { resize: vertical; }
+  .row { display: flex; align-items: center; }
+
+  /* 2) 屏外内容跳过渲染 */
+  .cv-section { content-visibility: auto; contain-intrinsic-size: 120px 160px; }
+
+  /* 虚拟列表 */
+  .vlist-wrap { position: relative; height: 360px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; background: #fff; will-change: scroll-position; }
+  .vlist-spacer { position: relative; width: 100%; }
+  .vlist-items { position: absolute; top: 0; left: 0; width: 100%; }
+  .vrow { position: absolute; left: 0; width: 100%; height: 40px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid #f0f0f0; will-change: transform; }
+  /* 3) 行定位用 transform 而非 top/height */
+  .vrow .op { display: flex; gap: 8px; }
+  .vrow button { padding: 2px 8px; font-size: 12px; }
+  .vrow .del { color: #dc2626; border-color: #fca5a5; }
+
+  /* 图片懒加载 */
+  .img-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+  .img-card { aspect-ratio: 4/3; border-radius: 8px; overflow: hidden; background: #e5e7eb; position: relative; }
+  .img-card img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .3s; transform: scale(.98); }
+  .img-card img.loaded { opacity: 1; transform: scale(1); }
+  .img-card .ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #9ca3af; font-size: 12px; }
+
+  /* 输入区 */
+  .mono { font-family: Consolas, monospace; font-size: 12px; color: var(--muted); }
+  .cache-line { font-size: 12px; margin: 3px 0; }
+  .hit { color: #059669; }
+  .miss { color: #b45309; }
+</style>
+</head>
+<body>
+
+<h1>简历信息输入模块 · 前端性能优化演示</h1>
+<div class="sub">虚拟列表 · 图片懒加载 · 事件委托 · 缓存 · 防抖节流 · CSS 重排重绘优化</div>
+
+<div class="stats" id="stats">
+  <div class="stat">虚拟列表 DOM 行数 <b id="st-dom">0</b></div>
+  <div class="stat">数据总量 <b id="st-total">0</b></div>
+  <div class="stat">懒加载图片 <b id="st-img">0/24</b></div>
+  <div class="stat">缓存命中 <b id="st-hit">0</b></div>
+  <div class="stat">防抖保存 <b id="st-save">0</b></div>
+  <div class="stat">节流滚动保存 <b id="st-scroll">0</b></div>
+  <div class="stat">输入原始事件 <b id="st-raw">0</b></div>
+</div>
+
+<!-- 1. 虚拟列表 + 3. 事件委托 -->
+<div class="card cv-section">
+  <h2>① 虚拟列表（10,000 条教育经历）</h2>
+  <div class="tip">仅渲染可视窗口（约 11 行），滚动时增量更新；删除按钮通过容器上的<b>事件委托</b>统一处理。</div>
+  <div class="vlist-wrap" id="vlist">
+    <div class="vlist-spacer" id="vspacer">
+      <div class="vlist-items" id="vitems"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 2. 图片懒加载 -->
+<div class="card cv-section">
+  <h2>② 图片懒加载（IntersectionObserver）</h2>
+  <div class="tip">可视区外图片不发请求，进入视口才填充 src；加载后淡入（opacity 合成层动画）。</div>
+  <div class="img-grid" id="imgGrid"></div>
+</div>
+
+<!-- 4. 缓存 -->
+<div class="card cv-section">
+  <h2>④ 缓存（Map 内存缓存 + localStorage 持久化，TTL 5 分钟）</h2>
+  <div class="tip">“匹配度估算”为昂贵计算，相同入参直接命中缓存，避免重复计算与重复渲染。</div>
+  <div class="row" style="gap:8px;">
+    <input type="text" id="cacheKw" value="算法,LLM,推荐系统" placeholder="岗位关键词，逗号分隔">
+    <button class="btn-primary" id="btnCalc">计算匹配度</button>
+  </div>
+  <div id="cacheLog" class="mono" style="margin-top:8px;"></div>
+</div>
+
+<!-- 5. 防抖节流 -->
+<div class="card cv-section">
+  <h2>⑤ 输入防抖 / 节流</h2>
+  <div class="tip">职责描述输入：<b>防抖 300ms</b> 自动保存草稿、<b>防抖</b> 统计字数（避免每次按键重排）；滚动位置用 <b>节流 1s</b> 写入缓存。</div>
+  <textarea id="duty" rows="3" placeholder="输入职责描述，观察下方：原始事件 vs 防抖后保存次数"></textarea>
+  <div class="mono" id="dutyInfo" style="margin-top:6px;"></div>
+</div>
+
+<!-- 6. CSS 优化说明 -->
+<div class="card cv-section">
+  <h2>⑥ CSS 减少重排重绘</h2>
+  <div class="tip">本页已应用的实践：</div>
+  <ul style="font-size:13px; line-height:1.9; padding-left:18px;">
+    <li>动画仅用 <code>transform / opacity</code>，进入合成层，不触发 reflow/repaint 重计算</li>
+    <li>屏外区块 <code>content-visibility: auto</code> + <code>contain-intrinsic-size</code> 跳过离屏渲染</li>
+    <li>虚拟行定位用 <code>transform: translateY</code> 而非 <code>top</code>；列表容器 <code>will-change: scroll-position</code></li>
+    <li>读写分离：滚动处理中先批量读取 scrollTop，再一次性更新 DOM</li>
+    <li>避免布局抖动（layout thrash）：不在循环里穿插 get 与 set</li>
+  </ul>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  /* ================= 1. 虚拟列表 ================= */
+  var TOTAL = 10000, ROW_H = 40, BUFFER = 5;
+  var vlist = document.getElementById('vlist');
+  var vspacer = document.getElementById('vspacer');
+  var vitems = document.getElementById('vitems');
+  var stDom = document.getElementById('st-dom');
+  var stTotal = document.getElementById('st-total');
+  stTotal.textContent = TOTAL;
+  vspacer.style.height = (TOTAL * ROW_H) + 'px';
+
+  var rows = {}; // 按 index 缓存已创建的 DOM 节点，减少重建
+  var startIdx = 0, endIdx = 0, ticking = false;
+
+  function makeRow(i) {
+    var el = rows[i];
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'vrow';
+      el.innerHTML = '<span></span><span class="op"><button class="edit">编辑</button><button class="del">删除</button></span>';
+      rows[i] = el;
+    }
+    el.style.transform = 'translateY(' + (i * ROW_H) + 'px)';
+    el.firstChild.textContent = '教育经历 #' + (i + 1) + ' · 北京大学 · 计算机科学 · 2020.09-2024.06';
+    el.setAttribute('data-idx', i);
+    return el;
+  }
+
+  function render(range) {
+    var doc = vitems.ownerDocument.createDocumentFragment();
+    for (var i = range.s; i <= range.e; i++) doc.appendChild(makeRow(i));
+    // 先清空再一次性插入（读写分离，避免每行单独触发 layout）
+    vitems.textContent = '';
+    vitems.appendChild(doc);
+    stDom.textContent = (range.e - range.s + 1);
+    startIdx = range.s; endIdx = range.e;
+  }
+
+  function onScroll() {
+    if (ticking) return;
+    ticking = true; // 用 rAF 合并滚动事件
+    requestAnimationFrame(function () {
+      var st = vlist.scrollTop;
+      var s = Math.max(0, Math.floor(st / ROW_H) - BUFFER);
+      var e = Math.min(TOTAL - 1, Math.ceil((st + vlist.clientHeight) / ROW_H) + BUFFER);
+      if (s !== startIdx || e !== endIdx) render({ s: s, e: e });
+      ticking = false;
+    });
+  }
+  vlist.addEventListener('scroll', onScroll, { passive: true });
+  render({ s: 0, e: Math.ceil(vlist.clientHeight / ROW_H) + BUFFER });
+
+  /* ================= 3. 事件委托 ================= */
+  var deleted = 0;
+  vitems.addEventListener('click', function (ev) {
+    var target = ev.target;
+    if (target.classList.contains('del')) {
+      var row = target.closest('.vrow');
+      var idx = Number(row.getAttribute('data-idx'));
+      row.classList.add('hidden-style');
+      deleted++;
+      log('事件委托 → 删除 #' + (idx + 1) + '（累计 ' + deleted + ' 次，仅 1 个监听器）');
+    } else if (target.classList.contains('edit')) {
+      log('事件委托 → 编辑 #' + (Number(target.closest('.vrow').getAttribute('data-idx')) + 1));
+    }
+  });
+
+  /* ================= 2. 图片懒加载 ================= */
+  var grid = document.getElementById('imgGrid');
+  var stImg = document.getElementById('st-img');
+  var loadedImg = 0;
+  for (var i = 0; i < 24; i++) {
+    var card = document.createElement('div');
+    card.className = 'img-card';
+    var ph = document.createElement('div');
+    ph.className = 'ph';
+    ph.textContent = '待加载 ' + (i + 1);
+    var img = document.createElement('img');
+    img.dataset.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="180">' +
+      '<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">' +
+      '<stop offset="0" stop-color="hsl(' + (i * 15 % 360) + ',70%,70%)"/>' +
+      '<stop offset="1" stop-color="hsl(' + (i * 15 % 360 + 40) + ',70%,45%)"/>' +
+      '</linearGradient></defs>' +
+      '<rect width="240" height="180" fill="url(#g)"/><text x="12" y="28" font-size="16" fill="#fff">图 ' + (i + 1) + '</text></svg>');
+    card.appendChild(ph);
+    card.appendChild(img);
+    grid.appendChild(card);
+  }
+  var io = new IntersectionObserver(function (entries) {
+    entries.forEach(function (en) {
+      if (!en.isIntersecting) return;
+      var img = en.target;
+      if (img.dataset.src) {
+        img.src = img.dataset.src;
+        delete img.dataset.src;
+        img.onload = function () {
+          img.classList.add('loaded');
+          img.previousSibling.style.display = 'none';
+          loadedImg++;
+          stImg.textContent = loadedImg + '/24';
+        };
+      }
+      io.unobserve(img);
+    });
+  }, { rootMargin: '100px' });
+  grid.querySelectorAll('img').forEach(function (img) { io.observe(img); });
+
+  /* ================= 4. 缓存 ================= */
+  var memCache = {}, hit = 0, miss = 0, LS_KEY = 'matchCache', TTL = 5 * 60 * 1000;
+  var stHit = document.getElementById('st-hit'), cacheLog = document.getElementById('cacheLog');
+
+  function expensiveScore(kw, tags) { // 模拟昂贵计算
+    var t0 = performance.now();
+    while (performance.now() - t0 < 60) { /* busy */ }
+    var score = 0, k = kw.split(',').filter(Boolean), t = tags.split(',').filter(Boolean);
+    k.forEach(function (x) {
+      t.forEach(function (y) { if (y.indexOf(x) !== -1 || x.indexOf(y) !== -1) score += 8; });
+    });
+    return Math.min(100, score + 50);
+  }
+  function loadLS() { try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch (e) { return {}; } }
+  function saveLS() { try { localStorage.setItem(LS_KEY, JSON.stringify(lsCache)); } catch (e) {} }
+  var lsCache = loadLS();
+  function compute(key) {
+    var now = Date.now();
+    if (memCache[key] && memCache[key].exp > now) { hit++; stHit.textContent = hit; return { v: memCache[key].v, src: '内存缓存' }; }
+    if (lsCache[key] && lsCache[key].exp > now) {
+      memCache[key] = lsCache[key]; hit++; stHit.textContent = hit; return { v: lsCache[key].v, src: 'localStorage' };
+    }
+    miss++;
+    var v = expensiveScore(key, key);
+    memCache[key] = { v: v, exp: now + TTL };
+    lsCache[key] = { v: v, exp: now + TTL };
+    saveLS();
+    return { v: v, src: '计算' };
+  }
+  document.getElementById('btnCalc').addEventListener('click', function () {
+    var r = compute(document.getElementById('cacheKw').value);
+    log('匹配度=' + r.v + '（来源：' + r.src + '）');
+  });
+
+  /* ================= 5. 防抖 / 节流 ================= */
+  var raw = 0, saves = 0, scrollSaves = 0, timer = null;
+  var duty = document.getElementById('duty');
+  var stSave = document.getElementById('st-save'), stScroll = document.getElementById('st-scroll'), stRaw = document.getElementById('st-raw');
+  var dutyInfo = document.getElementById('dutyInfo');
+  var lastScroll = 0;
+
+  function debounce(fn, wait) { var t; return function () { clearTimeout(t); t = setTimeout(fn, wait); }; }
+  function throttle(fn, wait) { var last = 0; return function () { var now = Date.now(); if (now - last >= wait) { last = now; fn(); } }; }
+
+  duty.addEventListener('input', function () {
+    raw++; stRaw.textContent = raw;
+    // 防抖：字数统计（避免每次按键重排计数标签）
+    debounceWordCount();
+    // 防抖：自动保存草稿
+    debounceSave();
+  });
+
+  var debounceWordCount = debounce(function () {
+    var n = duty.value.length;
+    dutyInfo.textContent = '字数=' + n + '/50' + (n > 50 ? '  ⚠ 字数超限，请精简' : '');
+  }, 200);
+
+  var debounceSave = debounce(function () {
+    saves++; stSave.textContent = saves;
+    log('防抖自动保存草稿（第 ' + saves + ' 次）');
+  }, 300);
+
+  var throttledScrollSave = throttle(function () {
+    scrollSaves++; stScroll.textContent = scrollSaves;
+    log('节流：滚动位置已保存 (scrollTop=' + vlist.scrollTop + ')');
+  }, 1000);
+  vlist.addEventListener('scroll', throttledScrollSave, { passive: true });
+
+  /* ================= 日志 ================= */
+  var logEl = document.getElementById('cacheLog');
+  function log(msg) {
+    var line = document.createElement('div');
+    line.className = 'cache-line';
+    line.textContent = new Date().toLocaleTimeString() + ' · ' + msg;
+    logEl.appendChild(line);
+    if (logEl.children.length > 30) logEl.removeChild(logEl.firstChild);
+  }
+})();
+</script>
+</body>
+</html>

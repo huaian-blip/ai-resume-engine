@@ -9,6 +9,7 @@ with sync_playwright() as p:
     pg = b.new_page(viewport={"width": 1280, "height": 900})
     pg.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
     pg.on("requestfailed", lambda req: errors.append("REQFAIL " + req.url))
+    pg.on("dialog", lambda d: d.accept())
     pg.goto(URL, wait_until="networkidle", timeout=60000)
 
     tpls = pg.eval_on_selector("#tplSelect", "el => el.options.length")
@@ -17,8 +18,8 @@ with sync_playwright() as p:
 
     # 模拟外部用户：先在 API 设置填写自己的 Key
     pg.fill("#llmKey", "sk-a8a1ee4990b848a0a529fede1d5aca1b")
-    pg.click("text=保存")
-    pg.wait_for_selector("#apiStatus", timeout=5000)
+    pg.click("#apiCard button.primary")
+    pg.wait_for_timeout(500)
     print("apiStatus:", pg.locator("#apiStatus").text_content())
     assert "已配置" in pg.locator("#apiStatus").text_content()
 

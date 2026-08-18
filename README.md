@@ -75,6 +75,8 @@ OPENAI_MODEL=doubao-seed-2-1-pro-260628                    # 账号已开通的�
 - `.env` 已加入 `.gitignore`，**禁止提交任何密钥**
 - LLM 输入防提示注入（`<<< >>>` 定界符 + 系统指令声明）
 - 敏感字段隐藏：`resume.sensitive_fields` 标记字段导出时打码为 `***`
+- **多租户 API Key**：AI 接口通过 `X-LLM-Key` / `X-LLM-Base` / `X-LLM-Model` 请求头使用调用方自己的密钥；公网部署时若不带 `X-LLM-Key` 直接返回 400（不代用开发者密钥），仅 localhost 本地开发回退 `.env` 密钥
+- **站点令牌**：设置 `API_TOKEN` 后所有接口需 `Authorization: Bearer <API_TOKEN>`，防止公网额度被滥用（与前端 `docs/config.js` 保持一致）
 
 ## 文档
 

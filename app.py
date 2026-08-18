@@ -17,7 +17,7 @@ import template_engine
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import HTMLResponse
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 from pydantic import BaseModel, Field
 
 load_dotenv()
@@ -45,30 +45,96 @@ STAR_SCHEMA = load_schema("star_schema.json")
 SELF_EVAL_SCHEMA = load_schema("self_eval_schema.json")
 
 
-def chat_json(system: str, user: str, schema: dict, retries: int = 1) -> dict:
-    """调用 LLM 并强制 JSON Schema 结构化输出，失败可重试。"""
-    for attempt in range(retries + 1):
+def _normalize(data: dict, schema: dict) -> dict:
+    """按 schema 属性名对 LLM 输出做模糊键名归并（如 responsibility_keywords -> responsibility）。"""
+    if not isinstance(data, dict) or not isinstance(schema, dict):
+        return data
+    for key, spec in schema.get("properties", {}).items():
+        if key not in data:
+            for k in list(data.keys()):
+                if key in k:
+                    data[key] = data.pop(k)
+                    break
+        if key in data and isinstance(data[key], dict) and isinstance(spec, dict) and "properties" in spec:
+            _normalize(data[key], spec)
+    return data
+
+
+def _validate(data: dict, schema: dict, strict: bool) -> None:
+    try:
+        import jsonschema
+    except ImportError:
+        return
+    if strict:
+        jsonschema.validate(data, schema)
+        return
+    try:
+        jsonschema.validate(data, schema)
+    except jsonschema.ValidationError:
+        _normalize(data, schema)
         try:
-            resp = client.chat.completions.create(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": user},
-                ],
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": schema.get("title", "Output"),
-                        "strict": True,
-                        "schema": schema,
-                    },
+            jsonschema.validate(data, schema)
+        except jsonschema.ValidationError:
+            pass  # 软校验：json_object 无法强制结构，尽力归一化后仍不符则放行
+
+
+def chat_json(system: str, user: str, schema: dict, retries: int = 1) -> dict:
+    """调用 LLM 并强制 JSON 输出。
+
+    优先使用 json_schema 结构化输出；若服务商不支持（如 DeepSeek 仅支持
+    json_object），自动降级为 json_object，并对输出做 Schema 软校验 + 字段归一化。
+    """
+    last_err = None
+
+    def _call(mode: str) -> dict:
+        kwargs = {
+            "model": MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        if mode == "json_schema":
+            kwargs["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": schema.get("title", "Output"),
+                    "strict": True,
+                    "schema": schema,
                 },
-            )
-            return json.loads(resp.choices[0].message.content)
-        except Exception as e:  # noqa: BLE001
-            if attempt == retries:
-                raise HTTPException(status_code=502, detail=f"AI 服务调用失败: {e}")
-    raise HTTPException(status_code=502, detail="AI 服务调用失败")
+            }
+            msgs = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]
+        else:
+            # 降级模式：把 Schema 注入提示词，约束字段名与结构
+            schema_text = json.dumps(schema, ensure_ascii=False)
+            msgs = [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user + "\n\n必须严格按以下 JSON Schema 输出（字段名、类型、嵌套结构完全一致）：\n" + schema_text},
+            ]
+            kwargs["response_format"] = {"type": "json_object"}
+        kwargs["messages"] = msgs
+        resp = client.chat.completions.create(**kwargs)
+        content = resp.choices[0].message.content
+        data = json.loads(content)
+        if not isinstance(data, dict):
+            raise ValueError("LLM 输出非 JSON 对象")
+        _validate(data, schema, strict=(mode == "json_schema"))
+        return data
+
+    for mode in ("json_schema", "json_object"):
+        for attempt in range(retries + 1):
+            try:
+                return _call(mode)
+            except BadRequestError as e:
+                last_err = e
+                if mode == "json_schema" and "response_format" in str(e).lower():
+                    break  # 服务商不支持 json_schema，降级 json_object
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+    raise HTTPException(status_code=502, detail=f"AI 服务调用失败: {last_err}")
 
 
 # ---------- 请求/响应模型 ----------
@@ -135,12 +201,12 @@ def match_score(req: MatchScoreRequest):
 
 @app.post("/optimize-star")
 def optimize_star(req: StarOptimizeRequest):
-    experiences = [{"text": e.text} for e in req.experiences]
+    experiences_text = "\n".join(f"{i}. {e.text}" for i, e in enumerate(req.experiences, 1))
     result = chat_json(
         prompts.STAR_SYSTEM_PROMPT,
         prompts.STAR_USER_PROMPT.format(
             job_keywords=json.dumps(req.job_keywords, ensure_ascii=False),
-            experiences_json=json.dumps(experiences, ensure_ascii=False),
+            experiences_text=experiences_text,
         ),
         STAR_SCHEMA,
     )

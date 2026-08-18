@@ -49,11 +49,12 @@ STAR_USER_PROMPT = """可选岗位要求（用于贴近JD调整措辞，可为�
 <<<JD_KEYWORDS>>>
 {job_keywords}
 
-待优化经历条目：
+待优化经历条目（每条单独一行）：
 <<<EXPERIENCES>>>
-{experiences_json}
+{experiences_text}
+<<<EXPERIENCES_END>>>
 
-请按每条分别优化，输出 JSON，结构参见系统消息中的 schema。"""
+请对每条分别优化，输出 JSON，结构参见系统消息中的 schema；每个 optimized_items 元素的 "original" 必须与输入条目一一对应。"""
 
 SELF_EVAL_SYSTEM_PROMPT = """你是一名简历润色专家。请把用户的自我评价改写为更有针对性的版本。
 规则：

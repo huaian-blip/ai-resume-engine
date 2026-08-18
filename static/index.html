@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 简历助手</title>
+<style>
+  :root { --primary:#2563eb; --bg:#f3f4f6; --card:#fff; --border:#e5e7eb; --muted:#6b7280; --danger:#dc2626; --ok:#059669; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Microsoft YaHei','PingFang SC',sans-serif; background:var(--bg); color:#1f2937; }
+  header { background:var(--primary); color:#fff; padding:12px 20px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+  header h1 { font-size:18px; }
+  .hd-actions { display:flex; gap:8px; }
+  main { display:grid; grid-template-columns: 480px 1fr; gap:16px; padding:16px; max-width:1400px; margin:0 auto; }
+  @media (max-width:1024px){ main { grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .card h2 { font-size:14px; margin-bottom:8px; color:#111; }
+  .tip { font-size:12px; color:var(--muted); margin-bottom:8px; }
+  .field { margin-bottom:8px; }
+  .field label { display:block; font-size:12px; color:#374151; margin-bottom:3px; }
+  input[type=text], textarea, select { width:100%; padding:7px 9px; border:1px solid var(--border); border-radius:6px; font-size:13px; font-family:inherit; }
+  textarea { resize:vertical; }
+  .row2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .row3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+  .entry { border:1px dashed var(--border); border-radius:8px; padding:10px; margin-bottom:8px; background:#fafafa; }
+  .entry .ehead { display:flex; justify-content:space-between; align-items:center; margin-bottom:6px; }
+  .entry .ehead b { font-size:12px; color:#111; }
+  button { border:1px solid var(--border); background:#fff; padding:6px 12px; border-radius:6px; cursor:pointer; font-size:13px; }
+  button:hover { border-color:var(--primary); color:var(--primary); }
+  button.primary { background:var(--primary); border-color:var(--primary); color:#fff; }
+  button.primary:hover { color:#fff; opacity:.9; }
+  button.small { padding:2px 8px; font-size:12px; }
+  button.danger { color:var(--danger); border-color:#fca5a5; }
+  .add-btn { width:100%; border-style:dashed; padding:6px; color:var(--primary); }
+  .chk { display:inline-flex; align-items:center; gap:4px; font-size:12px; margin-right:12px; color:#374151; }
+  .chk input { accent-color:var(--primary); }
+  #jd { height:72px; }
+  .ai-result { background:#f0f6ff; border:1px solid #bfdbfe; border-radius:8px; padding:10px; font-size:13px; margin-top:8px; display:none; }
+  .ai-result.show { display:block; }
+  .score { font-size:22px; font-weight:700; color:var(--primary); }
+  .gap { margin:6px 0; padding:6px 8px; background:#fff7ed; border:1px solid #fed7aa; border-radius:6px; font-size:12px; }
+  .star-item { margin:6px 0; padding:8px; background:#fff; border:1px solid var(--border); border-radius:6px; font-size:12px; }
+  .star-item .orig { color:var(--muted); text-decoration:line-through; margin-bottom:4px; }
+  .star-item .new { color:#111; }
+  .preview-box { position:sticky; top:16px; }
+  .preview-box iframe { width:100%; height:75vh; border:1px solid var(--border); border-radius:8px; background:#fff; }
+  .toolbar { display:flex; gap:8px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+  .toolbar select { width:auto; }
+  .status { font-size:12px; color:var(--muted); }
+  .err { color:var(--danger); font-size:12px; }
+  #matchScore, #jdInfo, #starOut, #seOut { }
+  .loader { display:inline-block; width:12px; height:12px; border:2px solid var(--border); border-top-color:var(--primary); border-radius:50%; animation:sp 1s linear infinite; vertical-align:middle; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AI 简历助手</h1>
+  <div class="hd-actions">
+    <select id="tplSelect" title="简历模板"></select>
+    <button class="primary" id="btnPreview">实时预览</button>
+    <button id="btnPdf">导出 PDF</button>
+    <button id="btnDocx">导出 Word</button>
+  </div>
+</header>
+
+<main>
+  <!-- 左侧：信息录入 + AI -->
+  <div class="left">
+
+    <div class="card">
+      <h2>基本信息</h2>
+      <div class="field"><label>姓名</label><input type="text" id="f_name" placeholder="张三"></div>
+      <div class="row2">
+        <div class="field"><label>电话</label><input type="text" id="f_phone" placeholder="13800000000"></div>
+        <div class="field"><label>邮箱</label><input type="text" id="f_email" placeholder="a@b.com"></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>城市</label><input type="text" id="f_city" placeholder="上海"></div>
+        <div class="field"><label>求职意向</label><input type="text" id="f_intention" placeholder="高级后端工程师"></div>
+      </div>
+      <div>
+        <label class="chk"><input type="checkbox" id="c_phone" checked> 电话为敏感信息</label>
+        <label class="chk"><input type="checkbox" id="c_email" checked> 邮箱为敏感信息</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>教育背景</h2><div class="tip">学校 / 学历 / 专业 / 毕业时间，可注明 GPA 或荣誉</div>
+      <div id="eduList"></div>
+      <button class="add-btn" onclick="addEntry('edu')">+ 添加教育经历</button>
+    </div>
+
+    <div class="card">
+      <h2>工作经历</h2><div class="tip">说明职位、时间、职责及成果（每条职责 ≤50 字）</div>
+      <div id="workList"></div>
+      <button class="add-btn" onclick="addEntry('work')">+ 添加工作经历</button>
+    </div>
+
+    <div class="card">
+      <h2>项目经验</h2><div class="tip">缺成果会标红提醒，建议补充量化成果</div>
+      <div id="projList"></div>
+      <button class="add-btn" onclick="addEntry('proj')">+ 添加项目经历</button>
+    </div>
+
+    <div class="card">
+      <h2>技能证书</h2>
+      <div class="row3">
+        <div class="field"><label>技能</label><input type="text" id="f_skills" placeholder="Java, Spring Cloud"></div>
+        <div class="field"><label>证书</label><input type="text" id="f_certs" placeholder="PMP"></div>
+        <div class="field"><label>语言</label><input type="text" id="f_langs" placeholder="英语 CET-6"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>自我评价</h2><div class="tip">≤500 字</div>
+      <textarea id="f_self" rows="3" placeholder="简述核心能力与亮点…"></textarea>
+      <button style="margin-top:8px;" onclick="optimizeSelfEval()">AI 优化自我评价</button>
+      <div id="seOut" class="ai-result"></div>
+    </div>
+
+    <div class="card">
+      <h2>岗位 JD 与 AI 匹配</h2>
+      <div class="tip">粘贴目标岗位 JD，AI 解析要求并计算你的匹配度与缺口</div>
+      <textarea id="jd" placeholder="粘贴岗位 JD 原文…"></textarea>
+      <div class="toolbar" style="margin-top:8px;">
+        <button class="primary" onclick="analyzeJd()">解析 JD + 匹配打分</button>
+        <button onclick="optimizeStar()">STAR 优化经历</button>
+      </div>
+      <div id="jdInfo" class="ai-result"></div>
+      <div id="matchScore" class="ai-result"></div>
+      <div id="starOut" class="ai-result"></div>
+    </div>
+
+  </div>
+
+  <!-- 右侧：预览 -->
+  <div class="preview-box">
+    <div class="card">
+      <h2>模板预览</h2>
+      <div class="status">输入变化后点「实时预览」，或直接按 Ctrl+Enter</div>
+      <iframe id="preview" title="简历预览"></iframe>
+    </div>
+  </div>
+</main>
+
+<script>
+'use strict';
+/* ---------------- 状态 ---------------- */
+var parsedJd = null;
+var templates = [];
+
+/* ---------------- 表单 DOM 工具 ---------------- */
+function $id(s){ return document.getElementById(s); }
+
+function splitCsv(v){ return v.split(/[,，]/).map(function(s){return s.trim();}).filter(Boolean); }
+
+function readEntry(containerId, fields){
+  var out = [];
+  document.querySelectorAll('#'+containerId+' .entry').forEach(function(el){
+    var obj = {};
+    fields.forEach(function(f){
+      var inp = el.querySelector('[data-f="'+f+'"]');
+      if (inp) obj[f] = inp.tagName === 'TEXTAREA' || f.indexOf('desc')>=0 || f==='note' || f==='achievements'
+        ? splitCsv(inp.value) : inp.value.trim();
+    });
+    out.push(obj);
+  });
+  return out;
+}
+
+/* ---------------- 动态条目 ---------------- */
+var counter = 0;
+function entryTemplate(kind){
+  counter++;
+  var e = document.createElement('div');
+  e.className = 'entry';
+  e.innerHTML = '<div class="ehead"><b>#'+counter+'</b><button class="small danger" onclick="this.closest(\'.entry\').remove()">删除</button></div>';
+  if (kind==='edu') e.innerHTML +=
+    '<div class="row2"><div class="field"><label>学校</label><input data-f="school" type="text" placeholder="北京大学"></div>'+
+    '<div class="field"><label>学历</label><select data-f="degree"><option>本科</option><option>硕士</option><option>博士</option><option>大专</option><option>其他</option></select></div></div>'+
+    '<div class="row2"><div class="field"><label>专业</label><input data-f="major" type="text" placeholder="计算机科学"></div>'+
+    '<div class="field"><label>毕业时间</label><input data-f="graduation" type="text" placeholder="2024.06"></div></div>'+
+    '<div class="field"><label>备注(GPA/荣誉)</label><input data-f="note" type="text" placeholder="GPA 3.8/4.0"></div>';
+  else if (kind==='work') e.innerHTML +=
+    '<div class="row2"><div class="field"><label>公司</label><input data-f="company" type="text"></div>'+
+    '<div class="field"><label>职位</label><input data-f="position" type="text"></div></div>'+
+    '<div class="row2"><div class="field"><label>开始</label><input data-f="start" type="text" placeholder="2021.07"></div>'+
+    '<div class="field"><label>结束(或 至今)</label><input data-f="end" type="text" placeholder="至今"></div></div>'+
+    '<div class="field"><label>职责描述（逗号分隔，每条≤50字）</label><textarea data-f="desc" rows="2"></textarea></div>';
+  else e.innerHTML +=
+    '<div class="row2"><div class="field"><label>项目名称</label><input data-f="name" type="text"></div>'+
+    '<div class="field"><label>担任角色</label><input data-f="role" type="text"></div></div>'+
+    '<div class="row2"><div class="field"><label>开始</label><input data-f="start" type="text" placeholder="2023.01"></div>'+
+    '<div class="field"><label>结束</label><input data-f="end" type="text" placeholder="2023.12"></div></div>'+
+    '<div class="field"><label>项目描述（逗号分隔）</label><textarea data-f="desc" rows="2"></textarea></div>'+
+    '<div class="field"><label>项目成果（量化更佳，逗号分隔）</label><textarea data-f="achievements" rows="1"></textarea></div>';
+  return e;
+}
+function addEntry(kind){
+  var map = {edu:'eduList', work:'workList', proj:'projList'};
+  $id(map[kind]).appendChild(entryTemplate(kind));
+}
+['edu','work','proj'].forEach(function(k){ addEntry(k); });
+
+/* ---------------- 组装简历对象 ---------------- */
+function buildResume(){
+  var sensitive = [];
+  if ($id('c_phone').checked) sensitive.push('phone');
+  if ($id('c_email').checked) sensitive.push('email');
+  return {
+    basic: {
+      name: $id('f_name').value.trim(), phone: $id('f_phone').value.trim(),
+      email: $id('f_email').value.trim(), city: $id('f_city').value.trim(),
+      job_intention: $id('f_intention').value.trim()
+    },
+    education: readEntry('eduList', ['school','degree','major','graduation','note']),
+    work: readEntry('workList', ['company','position','start','end','desc']).map(function(w){
+      return {company:w.company, position:w.position, start:w.start, end:w.end, responsibilities:w.desc};
+    }),
+    projects: readEntry('projList', ['name','role','start','end','desc','achievements']).map(function(p){
+      return {name:p.name, role:p.role, start:p.start, end:p.end, description:p.desc, achievements:p.achievements};
+    }),
+    skills: {
+      skills: splitCsv($id('f_skills').value),
+      certificates: splitCsv($id('f_certs').value),
+      languages: splitCsv($id('f_langs').value)
+    },
+    self_evaluation: $id('f_self').value.trim(),
+    sensitive_fields: sensitive
+  };
+}
+
+/* ---------------- API 调用 ---------------- */
+function api(path, body){
+  return fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+    .then(function(r){
+      if (r.status===200) {
+        var ct = r.headers.get('Content-Type')||'';
+        return ct.indexOf('json')>=0 ? r.json() : r.blob();
+      }
+      return r.json().then(function(j){ throw new Error(j.detail || '请求失败'); });
+    });
+}
+function show(id, html){ $id(id).innerHTML = html; $id(id).classList.add('show'); }
+function hide(id){ $id(id).classList.remove('show'); }
+
+function errMsg(e){ return '<div class="err">错误：'+e.message+'</div>'; }
+
+/* ---------------- 预览 / 导出 ---------------- */
+var previewBlobUrl = null;
+function doPreview(){
+  var resume = buildResume();
+  if (!resume.basic.name){ alert('请先填写姓名'); return; }
+  var hide = $id('c_phone').checked || $id('c_email').checked;
+  api('/render-preview', {resume:resume, template_id:$id('tplSelect').value, hide_sensitive:hide})
+    .then(function(blob){
+      if (previewBlobUrl) URL.revokeObjectURL(previewBlobUrl);
+      previewBlobUrl = URL.createObjectURL(blob);
+      $id('preview').src = previewBlobUrl;
+    }).catch(function(e){ alert('预览失败：'+e.message); });
+}
+function doExport(kind){
+  var resume = buildResume();
+  var hide = $id('c_phone').checked || $id('c_email').checked;
+  api('/export-' + (kind==='pdf'?'pdf':'docx'), {resume:resume, template_id:$id('tplSelect').value, hide_sensitive:hide})
+    .then(function(blob){
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'resume.' + kind;
+      a.click();
+    }).catch(function(e){ alert('导出失败：'+e.message); });
+}
+
+/* ---------------- AI 功能 ---------------- */
+function analyzeJd(){
+  var jd = $id('jd').value.trim();
+  if (!jd){ alert('请先粘贴岗位 JD'); return; }
+  hide('matchScore'); hide('starOut');
+  show('jdInfo', '<span class="loader"></span> 正在解析 JD…');
+  api('/parse-jd', {job_description:jd}).then(function(p){
+    parsedJd = p;
+    var hr = p.hard_requirements||{};
+    show('jdInfo',
+      '<b>'+p.job_title+'</b><br>学历：'+hr.education+' ｜ 年限：'+hr.experience_years+
+      '<br>技能：'+(hr.required_skills||[]).join(' / ')+
+      '<br><span style="color:var(--muted)">'+p.summary+'</span>');
+    return api('/match-score', {parsed_jd:p, user_resume:buildResume()});
+  }).then(function(m){
+    var html = '匹配度：<span class="score">'+m.total_score+'</span>/100'+
+      '（技能 '+m.dimension_scores.hard_skills+' / 经历 '+m.dimension_scores.experience_relevance+' / 素质 '+m.dimension_scores.soft_quality+' / 学历 '+m.dimension_scores.education+'）';
+    (m.gaps||[]).forEach(function(g){
+      html += '<div class="gap">缺口：<b>'+g.requirement+'</b><br>建议：'+g.suggestion+'</div>';
+    });
+    show('matchScore', html);
+  }).catch(function(e){ show('jdInfo', errMsg(e)); });
+}
+
+function optimizeStar(){
+  var exps = [];
+  buildResume().work.forEach(function(w){ (w.responsibilities||[]).forEach(function(r){ exps.push({text:r}); }); });
+  buildResume().projects.forEach(function(p){ (p.description||[]).forEach(function(d){ exps.push({text:d}); }); });
+  if (!exps.length){ alert('工作/项目经历中还没有职责描述'); return; }
+  var kws = [];
+  if (parsedJd) kws = (parsedJd.hard_requirements&&parsedJd.hard_requirements.required_skills)||[];
+  hide('starOut');
+  show('starOut', '<span class="loader"></span> STAR 优化中…');
+  api('/optimize-star', {job_keywords:kws, experiences:exps}).then(function(res){
+    var html = '';
+    res.optimized_items.forEach(function(it){
+      html += '<div class="star-item"><div class="orig">'+it.original+'</div><div class="new">✨ '+it.optimized+'</div>'+
+        (it.quantitative_suggestion ? '<div class="status">建议补量化：'+it.quantitative_suggestion+'</div>' : '')+'</div>';
+    });
+    show('starOut', html);
+  }).catch(function(e){ show('starOut', errMsg(e)); });
+}
+
+function optimizeSelfEval(){
+  var self = $id('f_self').value.trim();
+  if (!self){ alert('请先填写自我评价原文'); return; }
+  var kws = parsedJd ? ((parsedJd.hard_requirements&&parsedJd.hard_requirements.required_skills)||[]) : [];
+  show('seOut', '<span class="loader"></span> 优化中…');
+  api('/optimize-self-eval', {job_keywords:kws, self_evaluation:self, resume_highlights:[]}).then(function(r){
+    show('seOut', '✨ '+r.optimized+'<div class="status">字数 '+r.word_count+'</div><button class="small" style="margin-top:6px" onclick="applySelf(\''+r.optimized.replace(/[\'\\]/g,'')+'\')">应用到简历</button>');
+  }).catch(function(e){ show('seOut', errMsg(e)); });
+}
+function applySelf(txt){ $id('f_self').value = txt; }
+
+/* ---------------- 模板加载 / 快捷键 ---------------- */
+fetch('/templates').then(function(r){return r.json();}).then(function(d){
+  templates = d.templates;
+  templates.forEach(function(t){
+    var o = document.createElement('option');
+    o.value = t.id; o.textContent = t.name;
+    $id('tplSelect').appendChild(o);
+  });
+});
+document.addEventListener('keydown', function(e){
+  if ((e.ctrlKey||e.metaKey) && e.key==='Enter'){ e.preventDefault(); doPreview(); }
+});
+$id('btnPreview').onclick = doPreview;
+$id('btnPdf').onclick = function(){ doExport('pdf'); };
+$id('btnDocx').onclick = function(){ doExport('docx'); };
+</script>
+</body>
+</html>

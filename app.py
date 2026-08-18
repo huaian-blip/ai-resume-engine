@@ -239,6 +239,12 @@ def optimize_self_eval(req: SelfEvalRequest):
 
 # ---------- 多模板排版输出 ----------
 
+@app.get("/", response_class=HTMLResponse)
+def index():
+    """网页版界面。"""
+    return (BASE_DIR / "static" / "index.html").read_text(encoding="utf-8")
+
+
 @app.get("/templates")
 def templates():
     """列出可用简历模板。"""

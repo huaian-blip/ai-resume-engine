@@ -11,6 +11,7 @@ venv/
 
 # 测试产物
 *.log
+output/
 
 # IDE / OS
 .idea/

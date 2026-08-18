@@ -15,6 +15,13 @@ with sync_playwright() as p:
     print("模板数(经隧道加载):", tpls)
     assert tpls >= 2, "templates not loaded cross-origin"
 
+    # 模拟外部用户：先在 API 设置填写自己的 Key
+    pg.fill("#llmKey", "sk-a8a1ee4990b848a0a529fede1d5aca1b")
+    pg.click("text=保存")
+    pg.wait_for_selector("#apiStatus", timeout=5000)
+    print("apiStatus:", pg.locator("#apiStatus").text_content())
+    assert "已配置" in pg.locator("#apiStatus").text_content()
+
     pg.fill("#f_name", "公网测试")
     pg.fill("#f_intention", "后端工程师")
     pg.fill("#workList .entry [data-f='company']", "测试公司")

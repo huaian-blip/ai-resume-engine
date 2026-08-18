@@ -105,17 +105,31 @@ def _validate(data: dict, schema: dict, strict: bool) -> None:
             pass  # 软校验：json_object 无法强制结构，尽力归一化后仍不符则放行
 
 
-def chat_json(system: str, user: str, schema: dict, retries: int = 1) -> dict:
+def chat_json(
+    system: str,
+    user: str,
+    schema: dict,
+    retries: int = 1,
+    llm_key: str | None = None,
+    llm_base: str | None = None,
+    llm_model: str | None = None,
+) -> dict:
     """调用 LLM 并强制 JSON 输出。
 
     优先使用 json_schema 结构化输出；若服务商不支持（如 DeepSeek 仅支持
     json_object），自动降级为 json_object，并对输出做 Schema 软校验 + 字段归一化。
+
+    每次调用使用调用方提供的 llm_key/base/model（多租户：每个用户用自己的 Key）。
     """
+    llm_key = llm_key or os.getenv("OPENAI_API_KEY")
+    llm_base = llm_base or os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
+    llm_model = llm_model or MODEL
+    _client = OpenAI(api_key=llm_key, base_url=llm_base)
     last_err = None
 
     def _call(mode: str) -> dict:
         kwargs = {
-            "model": MODEL,
+            "model": llm_model,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -143,7 +157,7 @@ def chat_json(system: str, user: str, schema: dict, retries: int = 1) -> dict:
             ]
             kwargs["response_format"] = {"type": "json_object"}
         kwargs["messages"] = msgs
-        resp = client.chat.completions.create(**kwargs)
+        resp = _client.chat.completions.create(**kwargs)
         content = resp.choices[0].message.content
         data = json.loads(content)
         if not isinstance(data, dict):
@@ -162,6 +176,32 @@ def chat_json(system: str, user: str, schema: dict, retries: int = 1) -> dict:
             except Exception as e:  # noqa: BLE001
                 last_err = e
     raise HTTPException(status_code=502, detail=f"AI 服务调用失败: {last_err}")
+
+
+def resolve_llm(request: Request) -> tuple[str | None, str | None, str | None]:
+    """从请求头解析用户自带 LLM 配置。
+
+    返回 (api_key, base_url, model)。
+    - X-LLM-Key: 用户自己的 OpenAI 兼容 API Key（必填，除非是 localhost 本地开发）
+    - X-LLM-Base: API 地址，默认 DeepSeek
+    - X-LLM-Model: 模型名，默认 .env 的 OPENAI_MODEL
+    """
+    key = (request.headers.get("x-llm-key") or "").strip()
+    base = (request.headers.get("x-llm-base") or "").strip() or os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
+    model = (request.headers.get("x-llm-model") or "").strip() or MODEL
+    # 本地开发判断：cloudflared 隧道转发后 client.host 仍是 127.0.0.1，
+    # 因此用 Host 头区分（本地访问 Host 为 127.0.0.1/localhost，公网为隧道域名）。
+    req_host = request.headers.get("host", "") or ""
+    is_local = "127.0.0.1" in req_host or "localhost" in req_host
+    if not key:
+        if is_local:
+            key = os.getenv("OPENAI_API_KEY", "")  # 本地开发回退开发者密钥
+        if not key:
+            raise HTTPException(
+                status_code=400,
+                detail="请先在右上角「API 设置」填写你自己的 API Key（本服务不提供、也不代用开发者的密钥）",
+            )
+    return key, base, model
 
 
 # ---------- 请求/响应模型 ----------
@@ -206,16 +246,21 @@ def _validate_resume(resume: dict) -> str:
 # ---------- 接口 ----------
 
 @app.post("/parse-jd")
-def parse_jd(req: JdParseRequest):
+def parse_jd(req: JdParseRequest, request: Request):
+    key, base, model = resolve_llm(request)
     return chat_json(
         prompts.JD_SYSTEM_PROMPT,
         prompts.JD_USER_PROMPT.format(job_description=req.job_description),
         JD_SCHEMA,
+        llm_key=key,
+        llm_base=base,
+        llm_model=model,
     )
 
 
 @app.post("/match-score")
-def match_score(req: MatchScoreRequest):
+def match_score(req: MatchScoreRequest, request: Request):
+    key, base, model = resolve_llm(request)
     return chat_json(
         prompts.MATCH_SYSTEM_PROMPT,
         prompts.MATCH_USER_PROMPT.format(
@@ -223,11 +268,15 @@ def match_score(req: MatchScoreRequest):
             user_resume=json.dumps(req.user_resume, ensure_ascii=False),
         ),
         MATCH_SCHEMA,
+        llm_key=key,
+        llm_base=base,
+        llm_model=model,
     )
 
 
 @app.post("/optimize-star")
-def optimize_star(req: StarOptimizeRequest):
+def optimize_star(req: StarOptimizeRequest, request: Request):
+    key, base, model = resolve_llm(request)
     experiences_text = "\n".join(f"{i}. {e.text}" for i, e in enumerate(req.experiences, 1))
     result = chat_json(
         prompts.STAR_SYSTEM_PROMPT,
@@ -236,6 +285,9 @@ def optimize_star(req: StarOptimizeRequest):
             experiences_text=experiences_text,
         ),
         STAR_SCHEMA,
+        llm_key=key,
+        llm_base=base,
+        llm_model=model,
     )
     # 双端校验：前端实际计数，LLM 自报超限则回退为原文并标注
     for item in result.get("optimized_items", []):
@@ -250,7 +302,8 @@ def optimize_star(req: StarOptimizeRequest):
 
 
 @app.post("/optimize-self-eval")
-def optimize_self_eval(req: SelfEvalRequest):
+def optimize_self_eval(req: SelfEvalRequest, request: Request):
+    key, base, model = resolve_llm(request)
     result = chat_json(
         prompts.SELF_EVAL_SYSTEM_PROMPT,
         prompts.SELF_EVAL_USER_PROMPT.format(
@@ -259,6 +312,9 @@ def optimize_self_eval(req: SelfEvalRequest):
             resume_highlights=json.dumps(req.resume_highlights, ensure_ascii=False),
         ),
         SELF_EVAL_SCHEMA,
+        llm_key=key,
+        llm_base=base,
+        llm_model=model,
     )
     result["word_count"] = len(result.get("optimized", ""))
     return result

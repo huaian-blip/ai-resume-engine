@@ -69,6 +69,28 @@
   <!-- 左侧：信息录入 + AI -->
   <div class="left">
 
+    <div class="card" id="apiCard" style="border-color:#93c5fd;background:#f0f7ff;">
+      <h2>API 设置 <span class="status" id="apiStatus"></span></h2>
+      <div class="tip">AI 功能使用<b>你自己的</b> API Key（平台不代用开发者密钥，请自行到 DeepSeek 开放平台申请）。Key 仅保存在你的浏览器本地，直接发送给后端调用。</div>
+      <div class="field"><label>API Key</label>
+        <input type="password" id="llmKey" placeholder="sk-..." autocomplete="off"></div>
+      <div class="row2">
+        <div class="field"><label>模型</label>
+          <select id="llmModel">
+            <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+            <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+            <option value="deepseek-chat">deepseek-chat</option>
+            <option value="">自定义</option>
+          </select></div>
+        <div class="field"><label>API 地址（默认 DeepSeek）</label>
+          <input type="text" id="llmBase" placeholder="https://api.deepseek.com"></div>
+      </div>
+      <div class="toolbar" style="margin-top:6px;">
+        <button class="primary" onclick="saveLlm()">保存</button>
+        <button onclick="clearLlm()">清除</button>
+      </div>
+    </div>
+
     <div class="card">
       <h2>基本信息</h2>
       <div class="field"><label>姓名</label><input type="text" id="f_name" placeholder="张三"></div>
@@ -154,6 +176,32 @@ var templates = [];
 /* API 地址：本地同源留空；部署到 GitHub Pages 时填入后端公网地址 */
 var API_BASE = window.__API_BASE__ || '';
 var API_TOKEN = window.__API_TOKEN__ || '';
+var LLM = loadLlm();
+
+function loadLlm(){
+  try { return JSON.parse(localStorage.getItem('rsm_llm') || '{}'); } catch(e){ return {}; }
+}
+function saveLlm(){
+  var key = $id('llmKey').value.trim();
+  var model = $id('llmModel').value;
+  var base = $id('llmBase').value.trim() || 'https://api.deepseek.com';
+  LLM = {key:key, model:model, base:base};
+  localStorage.setItem('rsm_llm', JSON.stringify(LLM));
+  refreshApiStatus();
+  $id('llmKey').value = '';
+  alert('已保存。Key 仅存于本浏览器，用于本次 AI 调用。');
+}
+function clearLlm(){
+  LLM = {}; localStorage.removeItem('rsm_llm'); refreshApiStatus(); $id('llmKey').value = '';
+  alert('已清除');
+}
+function refreshApiStatus(){
+  var el = $id('apiStatus');
+  if (!el) return;
+  if (LLM.key){ el.textContent = '已配置：' + LLM.key.slice(0,6) + '…'; }
+  else { el.textContent = '（未配置）'; }
+}
+refreshApiStatus();
 
 /* ---------------- 表单 DOM 工具 ---------------- */
 function $id(s){ return document.getElementById(s); }
@@ -240,6 +288,9 @@ function buildResume(){
 function api(path, body){
   var headers = {'Content-Type':'application/json'};
   if (API_TOKEN) headers['Authorization'] = 'Bearer ' + API_TOKEN;
+  if (LLM.key) headers['X-LLM-Key'] = LLM.key;
+  if (LLM.base) headers['X-LLM-Base'] = LLM.base;
+  if (LLM.model) headers['X-LLM-Model'] = LLM.model;
   return fetch(API_BASE + path, {method:'POST', headers:headers, body: JSON.stringify(body)})
     .then(function(r){
       if (r.status===200) {
@@ -256,6 +307,12 @@ function show(id, html){ $id(id).innerHTML = html; $id(id).classList.add('show')
 function hide(id){ $id(id).classList.remove('show'); }
 
 function errMsg(e){ return '<div class="err">错误：'+e.message+'</div>'; }
+
+/* 公网部署必须自带 Key；本地(API_BASE 为空)后端有开发者密钥兜底 */
+function needLlmKey(){
+  if (API_BASE && !LLM.key){ alert('请先在上方「API 设置」填写你自己的 API Key'); return true; }
+  return false;
+}
 
 /* ---------------- 预览 / 导出 ---------------- */
 var previewBlobUrl = null;
@@ -286,6 +343,7 @@ function doExport(kind){
 function analyzeJd(){
   var jd = $id('jd').value.trim();
   if (!jd){ alert('请先粘贴岗位 JD'); return; }
+  if (needLlmKey()) return;
   hide('matchScore'); hide('starOut');
   show('jdInfo', '<span class="loader"></span> 正在解析 JD…');
   api('/parse-jd', {job_description:jd}).then(function(p){
@@ -311,6 +369,7 @@ function optimizeStar(){
   buildResume().work.forEach(function(w){ (w.responsibilities||[]).forEach(function(r){ exps.push({text:r}); }); });
   buildResume().projects.forEach(function(p){ (p.description||[]).forEach(function(d){ exps.push({text:d}); }); });
   if (!exps.length){ alert('工作/项目经历中还没有职责描述'); return; }
+  if (needLlmKey()) return;
   var kws = [];
   if (parsedJd) kws = (parsedJd.hard_requirements&&parsedJd.hard_requirements.required_skills)||[];
   hide('starOut');
@@ -328,6 +387,7 @@ function optimizeStar(){
 function optimizeSelfEval(){
   var self = $id('f_self').value.trim();
   if (!self){ alert('请先填写自我评价原文'); return; }
+  if (needLlmKey()) return;
   var kws = parsedJd ? ((parsedJd.hard_requirements&&parsedJd.hard_requirements.required_skills)||[]) : [];
   show('seOut', '<span class="loader"></span> 优化中…');
   api('/optimize-self-eval', {job_keywords:kws, self_evaluation:self, resume_highlights:[]}).then(function(r){

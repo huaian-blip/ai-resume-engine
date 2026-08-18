@@ -49,6 +49,9 @@ API_TOKEN = os.getenv("API_TOKEN", "").strip()
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    # CORS 预检请求必须放行（浏览器预检不携带自定义请求头）
+    if request.method == "OPTIONS":
+        return await call_next(request)
     if API_TOKEN:
         path = request.url.path
         if not (path in ("/", "/docs", "/redoc", "/openapi.json") or path.startswith("/docs/")):

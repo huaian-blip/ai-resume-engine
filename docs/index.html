@@ -145,11 +145,15 @@
   </div>
 </main>
 
+<script src="config.js"></script>
 <script>
 'use strict';
 /* ---------------- 状态 ---------------- */
 var parsedJd = null;
 var templates = [];
+/* API 地址：本地同源留空；部署到 GitHub Pages 时填入后端公网地址 */
+var API_BASE = window.__API_BASE__ || '';
+var API_TOKEN = window.__API_TOKEN__ || '';
 
 /* ---------------- 表单 DOM 工具 ---------------- */
 function $id(s){ return document.getElementById(s); }
@@ -234,13 +238,18 @@ function buildResume(){
 
 /* ---------------- API 调用 ---------------- */
 function api(path, body){
-  return fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+  var headers = {'Content-Type':'application/json'};
+  if (API_TOKEN) headers['Authorization'] = 'Bearer ' + API_TOKEN;
+  return fetch(API_BASE + path, {method:'POST', headers:headers, body: JSON.stringify(body)})
     .then(function(r){
       if (r.status===200) {
         var ct = r.headers.get('Content-Type')||'';
         return ct.indexOf('json')>=0 ? r.json() : r.blob();
       }
-      return r.json().then(function(j){ throw new Error(j.detail || '请求失败'); });
+      return r.text().then(function(t){
+        var d; try { d = JSON.parse(t); } catch(e) { d = {detail:t}; }
+        throw new Error(d.detail || '请求失败');
+      });
     });
 }
 function show(id, html){ $id(id).innerHTML = html; $id(id).classList.add('show'); }
@@ -328,14 +337,18 @@ function optimizeSelfEval(){
 function applySelf(txt){ $id('f_self').value = txt; }
 
 /* ---------------- 模板加载 / 快捷键 ---------------- */
-fetch('/templates').then(function(r){return r.json();}).then(function(d){
-  templates = d.templates;
-  templates.forEach(function(t){
-    var o = document.createElement('option');
-    o.value = t.id; o.textContent = t.name;
-    $id('tplSelect').appendChild(o);
+(function loadTemplates(){
+  var headers = {};
+  if (API_TOKEN) headers['Authorization'] = 'Bearer ' + API_TOKEN;
+  fetch(API_BASE + '/templates', {headers:headers}).then(function(r){return r.json();}).then(function(d){
+    templates = d.templates;
+    templates.forEach(function(t){
+      var o = document.createElement('option');
+      o.value = t.id; o.textContent = t.name;
+      $id('tplSelect').appendChild(o);
+    });
   });
-});
+})();
 document.addEventListener('keydown', function(e){
   if ((e.ctrlKey||e.metaKey) && e.key==='Enter'){ e.preventDefault(); doPreview(); }
 });

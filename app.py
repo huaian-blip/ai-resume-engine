@@ -15,7 +15,8 @@ from pathlib import Path
 import prompts
 import template_engine
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from openai import BadRequestError, OpenAI
 from pydantic import BaseModel, Field
@@ -32,6 +33,29 @@ client = OpenAI(
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 app = FastAPI(title="AI 简历引擎", version="1.0.0")
+
+# 公网部署跨域支持（demo：允许全部来源；生产建议收紧）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 可选 API 访问令牌：设置 API_TOKEN 后，除首页/文档外所有接口需携带
+# Authorization: Bearer <API_TOKEN>。用于防止公网部署时额度被滥用。
+API_TOKEN = os.getenv("API_TOKEN", "").strip()
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if API_TOKEN:
+        path = request.url.path
+        if not (path in ("/", "/docs", "/redoc", "/openapi.json") or path.startswith("/docs/")):
+            auth = request.headers.get("authorization", "")
+            if auth != f"Bearer {API_TOKEN}":
+                return Response("unauthorized", status_code=401)
+    return await call_next(request)
 
 
 def load_schema(name: str) -> dict:
@@ -241,8 +265,8 @@ def optimize_self_eval(req: SelfEvalRequest):
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    """网页版界面。"""
-    return (BASE_DIR / "static" / "index.html").read_text(encoding="utf-8")
+    """网页版界面（docs/ 目录同时用于 GitHub Pages 发布）。"""
+    return (BASE_DIR / "docs" / "index.html").read_text(encoding="utf-8")
 
 
 @app.get("/templates")

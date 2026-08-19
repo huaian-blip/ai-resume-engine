@@ -4,4 +4,4 @@
  * 浏览器请求由后端按 Origin 白名单（ALLOWED_ORIGINS）放行；
  * 非浏览器客户端请直接带 Authorization: Bearer <API_TOKEN> 调用后端。
  */
-window.__API_BASE__ = 'https://paragraphs-administrators-weekly-bridal.trycloudflare.com';
+window.__API_BASE__ = 'https://subjects-copied-contacting-doll.trycloudflare.com';

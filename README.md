@@ -67,7 +67,8 @@ RESPONSE_CACHE_MAX=128                            # 响应缓存条数（内存 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/templates` | 模板列表 |
-| GET | `/usage` | 当日 token 用量汇总 |
+| GET | `/usage` | 当日 token 用量汇总（JSON） |
+| GET | `/usage/page` | 用量可视化面板（HTML，免令牌） |
 | POST | `/full-analysis` | 一键分析：JD 解析 + 匹配评分（推荐，单次调用） |
 | POST | `/parse-jd` | 岗位 JD 解析（独立步骤） |
 | POST | `/match-score` | 岗位匹配打分（独立步骤） |

@@ -79,7 +79,7 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
     if API_TOKEN:
         path = request.url.path
-        if not (path in ("/", "/docs", "/redoc", "/openapi.json") or path.startswith("/docs/")):
+        if not (path in ("/", "/docs", "/redoc", "/openapi.json", "/usage/page") or path.startswith("/docs/")):
             # 浏览器来源命中白名单 → 免令牌（config.js 不再公开令牌）
             origin = request.headers.get("origin", "")
             if origin and _origin_allowed(origin):
@@ -626,6 +626,81 @@ def usage():
                 lbl[k] += rec.get(k) or 0
             lbl["requests"] += 1
     return {"date": today, "total": total, "by_label": by_label}
+
+
+USAGE_PAGE_HTML = """<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 用量面板</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background:#0f172a; color:#e2e8f0; padding:24px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:#94a3b8; font-size:13px; margin-bottom:20px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:24px; }
+  .card { background:#1e293b; border:1px solid #334155; border-radius:12px; padding:14px 16px; }
+  .card .label { font-size:12px; color:#94a3b8; }
+  .card .value { font-size:24px; font-weight:600; margin-top:4px; font-variant-numeric:tabular-nums; }
+  table { width:100%; border-collapse:collapse; background:#1e293b; border:1px solid #334155; border-radius:12px; overflow:hidden; }
+  th, td { text-align:left; padding:10px 14px; font-size:13px; }
+  th { background:#0b1626; color:#94a3b8; font-weight:500; }
+  td { border-top:1px solid #1f2b3d; }
+  tr td:first-child { font-weight:600; }
+  .btn { margin-top:16px; background:#3b82f6; color:#fff; border:none; border-radius:8px; padding:8px 16px; font-size:14px; cursor:pointer; }
+  .btn:hover { background:#2563eb; }
+  .err { color:#f87171; margin-top:12px; font-size:13px; }
+</style>
+</head>
+<body>
+  <h1>AI 用量面板</h1>
+  <div class="sub" id="sub">加载中…</div>
+  <div class="cards" id="cards"></div>
+  <h2 style="font-size:15px; margin:0 0 10px;">按接口</h2>
+  <table>
+    <thead><tr><th>接口</th><th>次数</th><th>输入 tokens</th><th>输出 tokens</th><th>合计 tokens</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <button class="btn" onclick="load()">刷新</button>
+  <div class="err" id="err"></div>
+<script>
+function fmt(n){ return (n||0).toLocaleString(); }
+function load(){
+  fetch('/usage').then(function(r){ return r.json(); }).then(function(d){
+    var t = d.total;
+    document.getElementById('sub').textContent = d.date + ' · 记录 ' + t.requests + ' 次 LLM 调用';
+    var cards = [
+      ['调用次数', fmt(t.requests)],
+      ['输入 tokens', fmt(t.prompt_tokens)],
+      ['输出 tokens', fmt(t.completion_tokens)],
+      ['合计 tokens', fmt(t.total_tokens)],
+    ];
+    document.getElementById('cards').innerHTML = cards.map(function(c){
+      return '<div class="card"><div class="label">'+c[0]+'</div><div class="value">'+c[1]+'</div></div>';
+    }).join('');
+    var labels = ['接口','次数','输入','输出','合计'];
+    var rows = Object.keys(d.by_label).map(function(k){
+      var v = d.by_label[k];
+      return '<tr><td>'+k+'</td><td>'+fmt(v.requests)+'</td><td>'+fmt(v.prompt_tokens)+'</td><td>'+fmt(v.completion_tokens)+'</td><td>'+fmt(v.total_tokens)+'</td></tr>';
+    });
+    document.getElementById('rows').innerHTML = rows.length ? rows.join('') : '<tr><td colspan="5">暂无记录</td></tr>';
+    document.getElementById('err').textContent = '';
+  }).catch(function(e){
+    document.getElementById('err').textContent = '加载失败：' + e.message + '（请确认已启动后端）';
+  });
+}
+load();
+</script>
+</body>
+</html>"""
+
+
+@app.get("/usage/page", response_class=HTMLResponse)
+def usage_page():
+    """用量统计的可视化面板（只读汇总，不含任何密钥）。"""
+    return USAGE_PAGE_HTML
 
 
 # ---------- 多模板排版输出 ----------

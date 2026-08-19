@@ -1,6 +1,7 @@
 /* GitHub Pages 部署配置
  * __API_BASE__ : 后端公网地址（cloudflared 隧道 URL，重启隧道后地址会变，需同步更新）
- * __API_TOKEN__: 与后端 .env 中 API_TOKEN 一致，保护后端不被滥用
+ * 安全说明：不再内置 __API_TOKEN__（公开站点的令牌等于透明）。
+ * 浏览器请求由后端按 Origin 白名单（ALLOWED_ORIGINS）放行；
+ * 非浏览器客户端请直接带 Authorization: Bearer <API_TOKEN> 调用后端。
  */
 window.__API_BASE__ = 'https://paragraphs-administrators-weekly-bridal.trycloudflare.com';
-window.__API_TOKEN__ = 'rsm-9f2c4e7a1b8d3f60';

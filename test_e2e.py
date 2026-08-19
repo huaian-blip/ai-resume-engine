@@ -1,17 +1,24 @@
 # -*- coding: utf-8 -*-
-"""端到端验证：DeepSeek + 全部 AI/模板接口。"""
+"""端到端验证：DeepSeek + 全部 AI/模板接口"""
 import os
 import sys
+from pathlib import Path
 
-os.environ["OPENAI_API_KEY"] = "sk-a8a1ee4990b848a0a529fede1d5aca1b"
-os.environ["OPENAI_BASE_URL"] = "https://api.deepseek.com"
-os.environ["OPENAI_MODEL"] = "deepseek-v4-flash"
+# 密钥一律从环境变量 / .env 读取，禁止硬编码进源码
 sys.path.insert(0, r"C:\Users\yuan\Documents\Tencent Files\ai-resume-engine")
+from dotenv import load_dotenv
+
+# 本地测试无需站点令牌：必须在 load_dotenv 之前置空，避免被 .env 覆盖开启鉴权
+os.environ["API_TOKEN"] = ""
+os.environ.setdefault("OPENAI_BASE_URL", "https://api.deepseek.com")
+os.environ.setdefault("OPENAI_MODEL", "deepseek-v4-flash")
+load_dotenv(Path(sys.path[0]) / ".env")
+assert os.environ.get("OPENAI_API_KEY"), "缺少 OPENAI_API_KEY（请在 .env 或环境变量中配置）"
 
 import app
 from fastapi.testclient import TestClient
 
-client = TestClient(app.app)
+client = TestClient(app.app, base_url="http://localhost")
 
 JD = "高级后端工程师，负责高并发交易系统架构设计与开发，要求 5 年以上 Java 经验，熟悉 Spring Cloud、MySQL、Redis、Kafka，具备分布式系统与微服务治理经验，本科及以上学历，有电商交易系统背景者优先。"
 

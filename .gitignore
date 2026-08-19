@@ -13,6 +13,10 @@ venv/
 *.log
 output/
 
+# 运行时数据（响应磁盘缓存 / 用量统计）
+.cache/
+.usage/
+
 # IDE / OS
 .idea/
 .vscode/

@@ -30,10 +30,9 @@ cloudflared tunnel --url http://127.0.0.1:8000
 
 ```js
 window.__API_BASE__ = 'https://你的新隧道地址';
-window.__API_TOKEN__ = 'rsm-9f2c4e7a1b8d3f60';   // 与 .env 的 API_TOKEN 一致，保持不变
 ```
 
-> 若 `.env` 里的 `API_TOKEN` 改过，此处必须同步修改。
+> 安全说明：`config.js` 不再内置 `__API_TOKEN__`。浏览器请求由后端按 Origin 白名单（`ALLOWED_ORIGINS`）放行；若后端 `.env` 设置了 `API_TOKEN`，仅脚本等非浏览器客户端需携带 `Authorization: Bearer <API_TOKEN>`。
 
 ### 第 4 步 · 推送，GitHub Pages 自动重建
 

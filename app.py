@@ -11,6 +11,10 @@
 import hashlib
 import json
 import os
+import sqlite3
+import threading
+import time
+from datetime import date
 from pathlib import Path
 
 import jsonschema
@@ -34,19 +38,38 @@ client = OpenAI(
 )
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
-app = FastAPI(title="AI 简历引擎", version="1.0.0")
+app = FastAPI(title="AI 简历引擎", version="1.1.0")
 
-# 公网部署跨域支持（demo：允许全部来源；生产建议收紧）
+# 允许的前端来源（GitHub Pages 域名）。浏览器请求携带 Origin 头，
+# 命中白名单即可免令牌访问；非浏览器客户端仍须走 API_TOKEN。
+ALLOWED_ORIGINS = [
+    o.strip().rstrip("/")
+    for o in os.getenv("ALLOWED_ORIGINS", "https://huaian-blip.github.io").split(",")
+    if o.strip()
+]
+
+# 跨域白名单（收紧，不再全开）
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS or ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # 可选 API 访问令牌：设置 API_TOKEN 后，除首页/文档外所有接口需携带
-# Authorization: Bearer <API_TOKEN>。用于防止公网部署时额度被滥用。
+# Authorization: Bearer <API_TOKEN>。浏览器来源命中 ALLOWED_ORIGINS 可免令牌。
 API_TOKEN = os.getenv("API_TOKEN", "").strip()
+
+# 用量统计目录（每次 LLM 调用追加一行记录，便于核对成本）
+USAGE_DIR = BASE_DIR / ".usage"
+# LLM 调用速率限制：按用户 Key 滑动窗口（1 分钟），防令牌泄露后被刷爆
+RATE_LIMIT_PER_MIN = int(os.getenv("RATE_LIMIT_PER_MIN", "20"))
+_rate_bucket: dict[str, list[float]] = {}
+_rate_lock = threading.Lock()
+
+
+def _origin_allowed(origin: str) -> bool:
+    return any(origin.rstrip("/") == o for o in ALLOWED_ORIGINS)
 
 
 @app.middleware("http")
@@ -57,6 +80,10 @@ async def auth_middleware(request: Request, call_next):
     if API_TOKEN:
         path = request.url.path
         if not (path in ("/", "/docs", "/redoc", "/openapi.json") or path.startswith("/docs/")):
+            # 浏览器来源命中白名单 → 免令牌（config.js 不再公开令牌）
+            origin = request.headers.get("origin", "")
+            if origin and _origin_allowed(origin):
+                return await call_next(request)
             auth = request.headers.get("authorization", "")
             if auth != f"Bearer {API_TOKEN}":
                 return Response("unauthorized", status_code=401)
@@ -137,9 +164,65 @@ TEMPERATURE = 0.3  # 结构化任务用低温，减少发散与重试
 
 # 客户端缓存：同一 (key, base) 复用连接，避免每次新建握手开销
 _CLIENT_CACHE: dict[tuple, OpenAI] = {}
-# 响应缓存：相同输入的重复请求直接命中，零 token 消耗
+# 响应缓存：相同输入的重复请求直接命中，零 token 消耗。
+# 两层：内存 L1（快）+ SQLite L2（持久，后端重启后仍命中）。
 _RESPONSE_CACHE: dict[str, dict] = {}
 _RESPONSE_CACHE_MAX = int(os.getenv("RESPONSE_CACHE_MAX", "128"))
+_CACHE_DB = BASE_DIR / ".cache" / "llm_cache.sqlite3"
+_cache_lock = threading.Lock()
+
+
+def _cache_init() -> None:
+    _CACHE_DB.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(_CACHE_DB) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, data TEXT, created REAL)"
+        )
+        # 启动时若超出上限，先淘汰最旧的
+        conn.execute(
+            "DELETE FROM cache WHERE key NOT IN (SELECT key FROM cache ORDER BY created DESC LIMIT ?)",
+            (_RESPONSE_CACHE_MAX,),
+        )
+
+
+def _cache_get(key: str):
+    item = _RESPONSE_CACHE.get(key)
+    if item:
+        return item["data"]
+    with _cache_lock, sqlite3.connect(_CACHE_DB) as conn:
+        row = conn.execute(
+            "SELECT data FROM cache WHERE key = ?", (key,)
+        ).fetchone()
+    if row is None:
+        return None
+    data = json.loads(row[0])
+    # 命中磁盘缓存 → 提升到内存 L1
+    if len(_RESPONSE_CACHE) < _RESPONSE_CACHE_MAX:
+        _RESPONSE_CACHE[key] = {"data": data}
+    return data
+
+
+def _cache_put(key: str, data: dict) -> None:
+    if _RESPONSE_CACHE_MAX <= 0:
+        return
+    if len(_RESPONSE_CACHE) >= _RESPONSE_CACHE_MAX:
+        # FIFO 淘汰最旧的一半，足够应对重复请求场景
+        for k in list(_RESPONSE_CACHE)[: len(_RESPONSE_CACHE) // 2]:
+            _RESPONSE_CACHE.pop(k, None)
+    _RESPONSE_CACHE[key] = {"data": data}
+    with _cache_lock, sqlite3.connect(_CACHE_DB) as conn:
+        conn.execute(
+            "INSERT INTO cache (key, data, created) VALUES (?, ?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET data = excluded.data, created = excluded.created",
+            (key, json.dumps(data, ensure_ascii=False), time.time()),
+        )
+        conn.execute(
+            "DELETE FROM cache WHERE key NOT IN (SELECT key FROM cache ORDER BY created DESC LIMIT ?)",
+            (_RESPONSE_CACHE_MAX,),
+        )
+
+
+_cache_init()
 
 
 def _get_client(key: str, base: str) -> OpenAI:
@@ -156,21 +239,6 @@ def _cache_key(llm_model: str, system: str, user: str, schema_name: str, mode: s
     for part in (llm_model, system, user, schema_name, mode):
         h.update(part.encode("utf-8"))
     return h.hexdigest()
-
-
-def _cache_get(key: str):
-    item = _RESPONSE_CACHE.get(key)
-    return item["data"] if item else None
-
-
-def _cache_put(key: str, data: dict) -> None:
-    if _RESPONSE_CACHE_MAX <= 0:
-        return
-    if len(_RESPONSE_CACHE) >= _RESPONSE_CACHE_MAX:
-        # FIFO 淘汰最旧的一半，足够应对重复请求场景
-        for k in list(_RESPONSE_CACHE)[: len(_RESPONSE_CACHE) // 2]:
-            _RESPONSE_CACHE.pop(k, None)
-    _RESPONSE_CACHE[key] = {"data": data}
 
 
 def compact_schema(schema: dict) -> dict:
@@ -209,6 +277,71 @@ def _extract_json(content: str) -> str:
     return text[start : end + 1]
 
 
+def _check_rate_limit(scope: str) -> None:
+    """滑动窗口限流：同一用户 Key 每分钟最多 RATE_LIMIT_PER_MIN 次 LLM 调用。"""
+    now = time.time()
+    with _rate_lock:
+        bucket = [t for t in _rate_bucket.get(scope, []) if now - t < 60]
+        if len(bucket) >= RATE_LIMIT_PER_MIN:
+            raise HTTPException(status_code=429, detail=f"请求过于频繁，请稍后再试（限 {RATE_LIMIT_PER_MIN} 次/分钟）")
+        bucket.append(now)
+        _rate_bucket[scope] = bucket
+
+
+def _log_usage(label: str, llm_key: str, llm_model: str, usage) -> None:
+    """记录一次 LLM 调用的 token 用量（JSONL，按天落盘），用于成本核对。"""
+    if usage is None:
+        return
+    USAGE_DIR.mkdir(parents=True, exist_ok=True)
+    # 只存 Key 的哈希，避免明文落盘
+    key_hash = hashlib.sha256((llm_key or "").encode("utf-8")).hexdigest()[:12]
+    record = {
+        "ts": int(time.time()),
+        "label": label,
+        "key_hash": key_hash,
+        "model": llm_model,
+        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+        "completion_tokens": getattr(usage, "completion_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }
+    with open(USAGE_DIR / f"{date.today().isoformat()}.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+def _lean_resume(resume: dict) -> dict:
+    """精简简历：匹配评分只用与 JD 相关的字段，去除自我评价/期望薪资等无关大段内容，并截断长文本。
+
+    既减少输入 token，也降低模型受无关信息干扰的概率。
+    """
+    def _cap(s, n=200):
+        s = (s or "").strip()
+        return s[:n]
+
+    b = resume.get("basic") or {}
+    lean = {"basic": {"job_intention": _cap(b.get("job_intention"))}}
+    lean["education"] = [
+        {"degree": e.get("degree"), "major": _cap(e.get("major"))}
+        for e in (resume.get("education") or [])[:5]
+    ]
+    lean["skills"] = {"skills": (resume.get("skills") or {}).get("skills", [])[:20]}
+    lean["work"] = [
+        {
+            "position": _cap(w.get("position")),
+            "responsibilities": [_cap(r, 150) for r in (w.get("responsibilities") or [])][:6],
+        }
+        for w in (resume.get("work") or [])[:5]
+    ]
+    lean["projects"] = [
+        {
+            "role": _cap(p.get("role")),
+            "description": [_cap(d, 150) for d in (p.get("description") or [])][:6],
+            "achievements": [_cap(a, 150) for a in (p.get("achievements") or [])][:4],
+        }
+        for p in (resume.get("projects") or [])[:5]
+    ]
+    return lean
+
+
 def chat_json(
     system: str,
     user: str,
@@ -217,6 +350,7 @@ def chat_json(
     llm_key: str | None = None,
     llm_base: str | None = None,
     llm_model: str | None = None,
+    label: str = "chat",
 ) -> dict:
     """调用 LLM 并强制 JSON 输出。
 
@@ -257,6 +391,7 @@ def chat_json(
             ]
             kwargs["response_format"] = {"type": "json_object"}
         resp = _client.chat.completions.create(**kwargs)
+        _log_usage(label, llm_key, llm_model, resp.usage)
         data = json.loads(_extract_json(resp.choices[0].message.content))
         if not isinstance(data, dict):
             raise ValueError("LLM 输出非 JSON 对象")
@@ -275,6 +410,10 @@ def chat_json(
                 hit = _cache_get(key)
                 if hit is not None:
                     return hit
+            try:
+                _check_rate_limit(llm_key)
+            except HTTPException:
+                raise  # 429 限流直接透传，不进入重试兜底
             try:
                 data = _call(mode)
                 _cache_put(key, data)
@@ -365,6 +504,7 @@ def parse_jd(req: JdParseRequest, request: Request):
         llm_key=key,
         llm_base=base,
         llm_model=model,
+        label="parse-jd",
     )
 
 
@@ -375,12 +515,13 @@ def match_score(req: MatchScoreRequest, request: Request):
         prompts.MATCH_SYSTEM_PROMPT,
         prompts.MATCH_USER_PROMPT.format(
             parsed_jd=json.dumps(req.parsed_jd, ensure_ascii=False),
-            user_resume=json.dumps(req.user_resume, ensure_ascii=False),
+            user_resume=json.dumps(_lean_resume(req.user_resume), ensure_ascii=False),
         ),
         MATCH_SCHEMA,
         llm_key=key,
         llm_base=base,
         llm_model=model,
+        label="match-score",
     )
 
 
@@ -397,12 +538,13 @@ def full_analysis(req: FullAnalysisRequest, request: Request):
         prompts.FULL_SYSTEM_PROMPT,
         prompts.FULL_USER_PROMPT.format(
             job_description=req.job_description,
-            user_resume=json.dumps(req.user_resume, ensure_ascii=False),
+            user_resume=json.dumps(_lean_resume(req.user_resume), ensure_ascii=False),
         ),
         FULL_SCHEMA,
         llm_key=key,
         llm_base=base,
         llm_model=model,
+        label="full-analysis",
     )
 
 
@@ -420,6 +562,7 @@ def optimize_star(req: StarOptimizeRequest, request: Request):
         llm_key=key,
         llm_base=base,
         llm_model=model,
+        label="optimize-star",
     )
     # 双端校验：前端实际计数，LLM 自报超限则回退为原文并标注
     for item in result.get("optimized_items", []):
@@ -447,9 +590,42 @@ def optimize_self_eval(req: SelfEvalRequest, request: Request):
         llm_key=key,
         llm_base=base,
         llm_model=model,
+        label="optimize-self-eval",
     )
     result["word_count"] = len(result.get("optimized", ""))
     return result
+
+
+# ---------- 用量统计 ----------
+
+@app.get("/usage")
+def usage():
+    """今日 token 用量汇总（需 API_TOKEN 或白名单来源；仅统计记录到 .usage/ 的调用）。"""
+    today = date.today().isoformat()
+    log_file = USAGE_DIR / f"{today}.jsonl"
+    total = {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    by_label: dict[str, dict] = {}
+    if log_file.exists():
+        for line in log_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                v = rec.get(k) or 0
+                total[k] += v
+            total["requests"] += 1
+            lbl = by_label.setdefault(
+                rec.get("label", "unknown"),
+                {"requests": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            )
+            for k in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                lbl[k] += rec.get(k) or 0
+            lbl["requests"] += 1
+    return {"date": today, "total": total, "by_label": by_label}
 
 
 # ---------- 多模板排版输出 ----------

@@ -8,10 +8,12 @@
 接口文档：http://127.0.0.1:8000/docs
 """
 
+import hashlib
 import json
 import os
 from pathlib import Path
 
+import jsonschema
 import prompts
 import template_engine
 from dotenv import load_dotenv
@@ -72,6 +74,24 @@ STAR_SCHEMA = load_schema("star_schema.json")
 SELF_EVAL_SCHEMA = load_schema("self_eval_schema.json")
 
 
+def _compose_full_schema() -> dict:
+    """组合解析+匹配为单次调用的 Schema（复用两个子 Schema，避免重复定义）。"""
+    def _strip(s: dict) -> dict:
+        return {k: v for k, v in s.items() if k not in ("$schema", "title")}
+
+    return {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "title": "FullAnalysisOutput",
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["parsed_jd", "match"],
+        "properties": {"parsed_jd": _strip(JD_SCHEMA), "match": _strip(MATCH_SCHEMA)},
+    }
+
+
+FULL_SCHEMA = _compose_full_schema()
+
+
 def _normalize(data: dict, schema: dict) -> dict:
     """按 schema 属性名对 LLM 输出做模糊键名归并（如 responsibility_keywords -> responsibility）。"""
     if not isinstance(data, dict) or not isinstance(schema, dict):
@@ -88,10 +108,6 @@ def _normalize(data: dict, schema: dict) -> dict:
 
 
 def _validate(data: dict, schema: dict, strict: bool) -> None:
-    try:
-        import jsonschema
-    except ImportError:
-        return
     if strict:
         jsonschema.validate(data, schema)
         return
@@ -105,11 +121,99 @@ def _validate(data: dict, schema: dict, strict: bool) -> None:
             pass  # 软校验：json_object 无法强制结构，尽力归一化后仍不符则放行
 
 
+# ---------- AI 调用成本优化 ----------
+
+# 各任务输出上限（output tokens）：仅为防失控的"保险丝"，须设宽松以容纳正常输出；
+# 模型会在内容完成时自行停止（finish=stop），上限过低反而截断 JSON → 重试更费 token。
+OUTPUT_LIMITS = {
+    "JdParseOutput": 2000,
+    "MatchScoreOutput": 4000,
+    "FullAnalysisOutput": 5000,
+    "StarOptimizeOutput": 6000,
+    "SelfEvaluationOutput": 2000,
+}
+DEFAULT_MAX_TOKENS = 4000
+TEMPERATURE = 0.3  # 结构化任务用低温，减少发散与重试
+
+# 客户端缓存：同一 (key, base) 复用连接，避免每次新建握手开销
+_CLIENT_CACHE: dict[tuple, OpenAI] = {}
+# 响应缓存：相同输入的重复请求直接命中，零 token 消耗
+_RESPONSE_CACHE: dict[str, dict] = {}
+_RESPONSE_CACHE_MAX = int(os.getenv("RESPONSE_CACHE_MAX", "128"))
+
+
+def _get_client(key: str, base: str) -> OpenAI:
+    k = (key, base)
+    c = _CLIENT_CACHE.get(k)
+    if c is None:
+        c = OpenAI(api_key=key, base_url=base)
+        _CLIENT_CACHE[k] = c
+    return c
+
+
+def _cache_key(llm_model: str, system: str, user: str, schema_name: str, mode: str) -> str:
+    h = hashlib.sha256()
+    for part in (llm_model, system, user, schema_name, mode):
+        h.update(part.encode("utf-8"))
+    return h.hexdigest()
+
+
+def _cache_get(key: str):
+    item = _RESPONSE_CACHE.get(key)
+    return item["data"] if item else None
+
+
+def _cache_put(key: str, data: dict) -> None:
+    if _RESPONSE_CACHE_MAX <= 0:
+        return
+    if len(_RESPONSE_CACHE) >= _RESPONSE_CACHE_MAX:
+        # FIFO 淘汰最旧的一半，足够应对重复请求场景
+        for k in list(_RESPONSE_CACHE)[: len(_RESPONSE_CACHE) // 2]:
+            _RESPONSE_CACHE.pop(k, None)
+    _RESPONSE_CACHE[key] = {"data": data}
+
+
+def compact_schema(schema: dict) -> dict:
+    """把完整 JSON Schema 压缩成 token 精简版（仅保留字段名/类型/必填，供 json_object 降级提示词使用）。
+
+    完整 Schema 含 $schema/description/additionalProperties 等大段说明文字，
+    注入提示词纯属浪费 token；这里只保留模型真正需要的结构信息。
+    """
+    def _compact(s: dict) -> object:
+        t = s.get("type")
+        if t == "object":
+            return {
+                "type": "object",
+                "required": sorted(s.get("required", [])),
+                "properties": {k: _compact(v) for k, v in s.get("properties", {}).items()},
+            }
+        if t == "array":
+            return {"type": "array", "items": _compact(s.get("items", {}))}
+        return {"type": t}
+
+    return _compact(schema)
+
+
+def _extract_json(content: str) -> str:
+    """从 LLM 输出中稳健提取 JSON 文本（容忍 markdown 代码块与前后缀文字），减少解析失败重试。"""
+    if not content:
+        raise ValueError("LLM 输出为空")
+    text = content.strip()
+    if text.startswith("```"):
+        text = text.strip("`")
+        if text.startswith(("json", "JSON")):
+            text = text[4:].lstrip()
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise ValueError("LLM 输出中未找到 JSON 对象")
+    return text[start : end + 1]
+
+
 def chat_json(
     system: str,
     user: str,
     schema: dict,
-    retries: int = 1,
+    retries: int = 2,
     llm_key: str | None = None,
     llm_base: str | None = None,
     llm_model: str | None = None,
@@ -117,62 +221,68 @@ def chat_json(
     """调用 LLM 并强制 JSON 输出。
 
     优先使用 json_schema 结构化输出；若服务商不支持（如 DeepSeek 仅支持
-    json_object），自动降级为 json_object，并对输出做 Schema 软校验 + 字段归一化。
+    json_object），自动降级为 json_object，并注入"紧凑版" Schema（而非完整
+    Schema），同时对输出做软校验 + 字段归一化。
 
-    每次调用使用调用方提供的 llm_key/base/model（多租户：每个用户用自己的 Key）。
+    成本优化：低温采样、max_tokens 输出上限、相同输入响应缓存、客户端复用。
     """
     llm_key = llm_key or os.getenv("OPENAI_API_KEY")
     llm_base = llm_base or os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com")
     llm_model = llm_model or MODEL
-    _client = OpenAI(api_key=llm_key, base_url=llm_base)
-    last_err = None
+    schema_name = schema.get("title", "Output")
+    max_tokens = OUTPUT_LIMITS.get(schema_name, DEFAULT_MAX_TOKENS)
 
     def _call(mode: str) -> dict:
+        msgs = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
         kwargs = {
             "model": llm_model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
+            "messages": msgs,
+            "temperature": TEMPERATURE,
+            "max_tokens": max_tokens,
         }
         if mode == "json_schema":
             kwargs["response_format"] = {
                 "type": "json_schema",
-                "json_schema": {
-                    "name": schema.get("title", "Output"),
-                    "strict": True,
-                    "schema": schema,
-                },
+                "json_schema": {"name": schema_name, "strict": True, "schema": schema},
             }
-            msgs = [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ]
         else:
-            # 降级模式：把 Schema 注入提示词，约束字段名与结构
-            schema_text = json.dumps(schema, ensure_ascii=False)
-            msgs = [
+            # 降级：注入紧凑 Schema，约束字段名与结构（完整 Schema 太浪费 token）
+            schema_text = json.dumps(compact_schema(schema), ensure_ascii=False)
+            kwargs["messages"] = [
                 {"role": "system", "content": system},
-                {"role": "user", "content": user + "\n\n必须严格按以下 JSON Schema 输出（字段名、类型、嵌套结构完全一致）：\n" + schema_text},
+                {"role": "user", "content": user + "\n\n请基于上述输入分析后，输出一个 JSON 对象。字段名、类型与嵌套结构必须和下面完全一致，但每个字段的值要填写分析得到的实际内容（如 job_title 应填岗位名称），不要原样重复下面的结构说明：\n" + schema_text},
             ]
             kwargs["response_format"] = {"type": "json_object"}
-        kwargs["messages"] = msgs
         resp = _client.chat.completions.create(**kwargs)
-        content = resp.choices[0].message.content
-        data = json.loads(content)
+        data = json.loads(_extract_json(resp.choices[0].message.content))
         if not isinstance(data, dict):
             raise ValueError("LLM 输出非 JSON 对象")
+        # 弱模型偶发"回显 Schema 模板"而非填写数据，判定为失败并触发重试
+        if {"type", "required", "properties"} <= set(data) and data.get("type") == "object":
+            raise ValueError("LLM 输出疑似回显 Schema，视为失败并重试")
         _validate(data, schema, strict=(mode == "json_schema"))
         return data
 
+    _client = _get_client(llm_key, llm_base)
+
     for mode in ("json_schema", "json_object"):
         for attempt in range(retries + 1):
+            key = _cache_key(llm_model, system, user, schema_name, mode)
+            if attempt == 0:
+                hit = _cache_get(key)
+                if hit is not None:
+                    return hit
             try:
-                return _call(mode)
+                data = _call(mode)
+                _cache_put(key, data)
+                return data
             except BadRequestError as e:
-                last_err = e
                 if mode == "json_schema" and "response_format" in str(e).lower():
-                    break  # 服务商不支持 json_schema，降级 json_object
+                    break  # 服务商不支持 json_schema → 降级 json_object
+                raise HTTPException(status_code=502, detail=f"AI 服务调用失败: {e}")
             except Exception as e:  # noqa: BLE001
                 last_err = e
     raise HTTPException(status_code=502, detail=f"AI 服务调用失败: {last_err}")
@@ -268,6 +378,28 @@ def match_score(req: MatchScoreRequest, request: Request):
             user_resume=json.dumps(req.user_resume, ensure_ascii=False),
         ),
         MATCH_SCHEMA,
+        llm_key=key,
+        llm_base=base,
+        llm_model=model,
+    )
+
+
+class FullAnalysisRequest(BaseModel):
+    job_description: str = Field(min_length=1, description="岗位 JD 原文")
+    user_resume: dict = Field(description="用户简历结构化信息")
+
+
+@app.post("/full-analysis")
+def full_analysis(req: FullAnalysisRequest, request: Request):
+    """JD 解析 + 匹配评分，一次 LLM 调用完成（省一次往返与 JD 重发）。"""
+    key, base, model = resolve_llm(request)
+    return chat_json(
+        prompts.FULL_SYSTEM_PROMPT,
+        prompts.FULL_USER_PROMPT.format(
+            job_description=req.job_description,
+            user_resume=json.dumps(req.user_resume, ensure_ascii=False),
+        ),
+        FULL_SCHEMA,
         llm_key=key,
         llm_base=base,
         llm_model=model,

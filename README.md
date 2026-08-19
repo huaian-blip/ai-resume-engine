@@ -6,6 +6,7 @@ AI 简历生成软件核心后端：岗位分析匹配、STAR 法则自动优化
 
 - **岗位 JD 解析**：`/parse-jd` 结构化输出硬/软要求与关键词
 - **岗位匹配打分**：`/match-score` 四维加权评分 + 缺口补强建议
+- **一键分析（推荐）**：`/full-analysis` 一次 LLM 调用完成 JD 解析 + 匹配评分，省一次往返与 JD 重发，前端「分析」按钮已默认走此接口
 - **STAR 优化**：`/optimize-star` 单条 ≤50 字，S/T/A/R 要素 + 量化建议，双端字数校验
 - **自我评价优化**：`/optimize-self-eval` ≤500 字
 - **多模板输出**：`/templates` `/render-preview` `/export-pdf` `/export-docx`，敏感字段可隐藏
@@ -60,8 +61,9 @@ OPENAI_MODEL=doubao-seed-2-1-pro-260628                    # 账号已开通的�
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | GET | `/templates` | 模板列表 |
-| POST | `/parse-jd` | 岗位 JD 解析 |
-| POST | `/match-score` | 岗位匹配打分 |
+| POST | `/full-analysis` | 一键分析：JD 解析 + 匹配评分（推荐，单次调用） |
+| POST | `/parse-jd` | 岗位 JD 解析（独立步骤） |
+| POST | `/match-score` | 岗位匹配打分（独立步骤） |
 | POST | `/optimize-star` | STAR 优化经历 |
 | POST | `/optimize-self-eval` | 自我评价优化 |
 | POST | `/render-preview` | HTML 实时预览 |
@@ -69,6 +71,16 @@ OPENAI_MODEL=doubao-seed-2-1-pro-260628                    # 账号已开通的�
 | POST | `/export-docx` | Word 导出 |
 
 完整交互式文档：启动后访问 `/docs`。
+
+## AI 调用成本优化
+
+- **紧凑 Schema 注入**：`json_object` 降级时仅注入字段名/类型/必填（约省输入 token 25–35%），完整 Schema 不再写入提示词
+- **响应缓存**：相同输入（Key+模型+内容）直接命中，重复请求零 token、毫秒级返回；上限 `RESPONSE_CACHE_MAX`（默认 128 条 FIFO）
+- **输出上限**：按任务设宽松 `max_tokens` 保险丝，防失控超发且不截断正常输出
+- **低温采样**：`temperature=0.3` 减少发散与返工
+- **回显检测 + JSON 加固**：识别弱模型偶发的 Schema 回显并重试；容忍代码块/前后缀文字，减少解析失败重试
+- **客户端复用**：同 `(key, base)` 复用连接，`jsonschema` 顶层导入
+- **合并调用**：前端「分析」默认走 `/full-analysis`，评分流程由 2 次 LLM 调用降为 1 次
 
 ## 安全
 

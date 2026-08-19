@@ -345,16 +345,15 @@ function analyzeJd(){
   if (!jd){ alert('请先粘贴岗位 JD'); return; }
   if (needLlmKey()) return;
   hide('matchScore'); hide('starOut');
-  show('jdInfo', '<span class="loader"></span> 正在解析 JD…');
-  api('/parse-jd', {job_description:jd}).then(function(p){
+  show('jdInfo', '<span class="loader"></span> 正在分析 JD 与匹配度…');
+  api('/full-analysis', {job_description:jd, user_resume:buildResume()}).then(function(res){
+    var p = res.parsed_jd, m = res.match;
     parsedJd = p;
     var hr = p.hard_requirements||{};
     show('jdInfo',
       '<b>'+p.job_title+'</b><br>学历：'+hr.education+' ｜ 年限：'+hr.experience_years+
       '<br>技能：'+(hr.required_skills||[]).join(' / ')+
       '<br><span style="color:var(--muted)">'+p.summary+'</span>');
-    return api('/match-score', {parsed_jd:p, user_resume:buildResume()});
-  }).then(function(m){
     var html = '匹配度：<span class="score">'+m.total_score+'</span>/100'+
       '（技能 '+m.dimension_scores.hard_skills+' / 经历 '+m.dimension_scores.experience_relevance+' / 素质 '+m.dimension_scores.soft_quality+' / 学历 '+m.dimension_scores.education+'）';
     (m.gaps||[]).forEach(function(g){

@@ -3,7 +3,18 @@
 前端已发布在 GitHub Pages：`https://huaian-blip.github.io/ai-resume-engine/`
 页面本身是静态的，但「分析 / STAR 优化 / 自我评价」等 AI 功能需要调用后端 API，因此每次使用前需按本指南启动本地后端并开一条公网隧道。
 
-## 每次使用步骤
+## 快速方式（推荐）：一键脚本
+
+```powershell
+cd "C:\Users\yuan\Documents\Tencent Files\ai-resume-engine"
+.\start-tunnel.ps1 -Push
+```
+
+脚本会自动：启动后端（若未运行）→ 起临时隧道 → 抓取新地址并写入 `docs/config.js` → git 提交推送，约 1 分钟后线上生效。不用再手动改配置。
+
+> 无 `-Push` 参数时只更新本地 `config.js`，不推送。
+
+## 手动步骤
 
 ### 第 1 步 · 启动后端
 
